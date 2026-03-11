@@ -1,6 +1,7 @@
 # skills
 
 The CLI for the open agent skills ecosystem.
+[简体中文](./README_ZH.md) | English
 
 <!-- agent-list:start -->
 Supports **OpenCode**, **Claude Code**, **Codex**, **Cursor**, and [37 more](#available-agents).
@@ -95,6 +96,9 @@ When installing interactively, you can choose:
 | Command                      | Description                                    |
 | ---------------------------- | ---------------------------------------------- |
 | `npx skills list`            | List installed skills (alias: `ls`)            |
+| `npx skills enable [skills]` | Enable disabled skills (alias: `e`)         |
+| `npx skills disable [skills]` | Disable skills (alias: `d`)                |
+| `npx skills status [skills]` | Check if skills are enabled or disabled (alias: `s`) |
 | `npx skills find [query]`    | Search for skills interactively or by keyword  |
 | `npx skills remove [skills]` | Remove installed skills from agents            |
 | `npx skills check`           | Check for available skill updates              |
@@ -188,6 +192,87 @@ npx skills rm my-skill
 | `-s, --skill`  | Specify skills to remove (use `'*'` for all)     |
 | `-y, --yes`    | Skip confirmation prompts                        |
 | `--all`        | Shorthand for `--skill '*' --agent '*' -y`       |
+
+### `skills enable`
+
+Enable disabled skills. Disabled skills won't be loaded by agents until enabled.
+
+```bash
+# Enable interactively (select from disabled skills)
+npx skills enable
+
+# Enable specific skill by name
+npx skills enable web-design-guidelines
+
+# Enable multiple skills
+npx skills enable frontend-design web-design-guidelines -y
+
+# Enable global skill
+npx skills enable --global web-design-guidelines
+
+# Use 'e' alias
+npx skills e web-design-guidelines
+```
+
+| Option         | Description                                      |
+| -------------- | ------------------------------------------------ |
+| `-g, --global` | Enable global skills (~/) instead of project |
+| `-y, --yes`    | Skip confirmation prompts                        |
+
+### `skills disable`
+
+Disable installed skills. Disabled skills won't be loaded by agents.
+
+```bash
+# Disable interactively (select from enabled skills)
+npx skills disable
+
+# Disable specific skill by name
+npx skills disable web-design-guidelines
+
+# Disable multiple skills
+npx skills disable frontend-design web-design-guidelines -y
+
+# Disable global skill
+npx skills disable --global web-design-guidelines
+
+# Use 'd' alias
+npx skills d web-design-guidelines
+```
+
+| Option         | Description                                      |
+| -------------- | ------------------------------------------------ |
+| `-g, --global` | Disable global skills (~/) instead of project |
+| `-y, --yes`    | Skip confirmation prompts                        |
+
+### `skills status`
+
+Check if skills are enabled or disabled.
+
+```bash
+# Check status of all installed skills
+npx skills status
+
+# Check specific skill status
+npx skills status web-design-guidelines
+
+# Check multiple skills
+npx skills status web-design-guidelines frontend-design
+
+# Check global skills
+npx skills status --global
+
+# Use 's' alias
+npx skills s web-design-guidelines
+```
+
+| Option         | Description                                      |
+| -------------- | ------------------------------------------------ |
+| `-g, --global` | Check global skills (~/) instead of project |
+
+**Output:**
+- `[enabled]` - Skill is active and will be loaded by agents
+- `[disabled]` - Skill is disabled and won't be loaded by agents
 
 ## What are Agent Skills?
 
