@@ -26,6 +26,17 @@ export interface LocalSkillLockEntry {
 }
 
 /**
+ * Tracks disabled skills.
+ */
+export interface DisabledSkills {
+  /** Map of skill name to disabled timestamp */
+  skills: Record<string, {
+    /** ISO timestamp when the skill was disabled */
+    disabledAt: string;
+  }>;
+}
+
+/**
  * The structure of the local (project-scoped) skill lock file.
  * This file is meant to be checked into version control.
  *
@@ -37,6 +48,8 @@ export interface LocalSkillLockFile {
   version: number;
   /** Map of skill name to its lock entry (sorted alphabetically) */
   skills: Record<string, LocalSkillLockEntry>;
+  /** Tracks disabled skills */
+  disabled?: DisabledSkills;
 }
 
 /**
@@ -162,6 +175,47 @@ export async function removeSkillFromLocalLock(skillName: string, cwd?: string):
   delete lock.skills[skillName];
   await writeLocalLock(lock, cwd);
   return true;
+}
+
+/**
+ * Disable a local skill by adding it to the disabled section.
+ */
+export async function disableLocalSkill(skillName: string, cwd?: string): Promise<void> {
+  const lock = await readLocalLock(cwd);
+  if (!lock.disabled) {
+    lock.disabled = { skills: {} };
+  }
+  lock.disabled.skills[skillName] = {
+    disabledAt: new Date().toISOString(),
+  };
+  await writeLocalLock(lock, cwd);
+}
+
+/**
+ * Enable a local skill by removing it from the disabled section.
+ */
+export async function enableLocalSkill(skillName: string, cwd?: string): Promise<void> {
+  const lock = await readLocalLock(cwd);
+  if (lock.disabled && lock.disabled.skills[skillName]) {
+    delete lock.disabled.skills[skillName];
+    await writeLocalLock(lock, cwd);
+  }
+}
+
+/**
+ * Check if a local skill is disabled.
+ */
+export async function isLocalSkillDisabled(skillName: string, cwd?: string): Promise<boolean> {
+  const lock = await readLocalLock(cwd);
+  return lock.disabled?.skills[skillName] !== undefined;
+}
+
+/**
+ * Get all disabled local skill names.
+ */
+export async function getLocalDisabledSkills(cwd?: string): Promise<string[]> {
+  const lock = await readLocalLock(cwd);
+  return Object.keys(lock.disabled?.skills ?? {});
 }
 
 function createEmptyLocalLock(): LocalSkillLockFile {

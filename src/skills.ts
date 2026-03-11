@@ -3,6 +3,8 @@ import { join, basename, dirname, resolve, normalize, sep } from 'path';
 import matter from 'gray-matter';
 import type { Skill } from './types.ts';
 import { getPluginSkillPaths, getPluginGroupings } from './plugin-manifest.ts';
+import { isSkillDisabled } from './skill-lock.ts';
+import { isLocalSkillDisabled } from './local-lock.ts';
 
 const SKIP_DIRS = ['node_modules', '.git', 'dist', 'build', '__pycache__'];
 
@@ -91,6 +93,8 @@ export interface DiscoverSkillsOptions {
   includeInternal?: boolean;
   /** Search all subdirectories even when a root SKILL.md exists */
   fullDepth?: boolean;
+  /** Include disabled skills in the result (default: false) */
+  includeDisabled?: boolean;
 }
 
 /**
@@ -220,6 +224,20 @@ export async function discoverSkills(
         seenNames.add(skill.name);
       }
     }
+  }
+
+  // Filter disabled skills unless explicitly requested
+  if (!options?.includeDisabled) {
+    const resultSkills: Skill[] = [];
+    for (const skill of skills) {
+      // Check both global and local disabled status
+      const isGloballyDisabled = await isSkillDisabled(skill.name).catch(() => false);
+      const isLocallyDisabled = await isLocalSkillDisabled(skill.name, process.cwd()).catch(() => false);
+      if (!isGloballyDisabled && !isLocallyDisabled) {
+        resultSkills.push(skill);
+      }
+    }
+    return resultSkills;
   }
 
   return skills;

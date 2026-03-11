@@ -43,6 +43,17 @@ export interface DismissedPrompts {
 }
 
 /**
+ * Tracks disabled skills.
+ */
+export interface DisabledSkills {
+  /** Map of skill name to disabled timestamp */
+  skills: Record<string, {
+    /** ISO timestamp when the skill was disabled */
+    disabledAt: string;
+  }>;
+}
+
+/**
  * The structure of the skill lock file.
  */
 export interface SkillLockFile {
@@ -54,6 +65,8 @@ export interface SkillLockFile {
   dismissed?: DismissedPrompts;
   /** Last selected agents for installation */
   lastSelectedAgents?: string[];
+  /** Tracks disabled skills */
+  disabled?: DisabledSkills;
 }
 
 /**
@@ -342,4 +355,45 @@ export async function saveSelectedAgents(agents: string[]): Promise<void> {
   const lock = await readSkillLock();
   lock.lastSelectedAgents = agents;
   await writeSkillLock(lock);
+}
+
+/**
+ * Disable a skill by adding it to the disabled section.
+ */
+export async function disableSkill(skillName: string): Promise<void> {
+  const lock = await readSkillLock();
+  if (!lock.disabled) {
+    lock.disabled = { skills: {} };
+  }
+  lock.disabled.skills[skillName] = {
+    disabledAt: new Date().toISOString(),
+  };
+  await writeSkillLock(lock);
+}
+
+/**
+ * Enable a skill by removing it from the disabled section.
+ */
+export async function enableSkill(skillName: string): Promise<void> {
+  const lock = await readSkillLock();
+  if (lock.disabled && lock.disabled.skills[skillName]) {
+    delete lock.disabled.skills[skillName];
+    await writeSkillLock(lock);
+  }
+}
+
+/**
+ * Check if a skill is disabled.
+ */
+export async function isSkillDisabled(skillName: string): Promise<boolean> {
+  const lock = await readSkillLock();
+  return lock.disabled?.skills[skillName] !== undefined;
+}
+
+/**
+ * Get all disabled skill names.
+ */
+export async function getDisabledSkills(): Promise<string[]> {
+  const lock = await readSkillLock();
+  return Object.keys(lock.disabled?.skills ?? {});
 }

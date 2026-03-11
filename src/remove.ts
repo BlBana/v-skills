@@ -4,7 +4,12 @@ import { readdir, rm, lstat } from 'fs/promises';
 import { join } from 'path';
 import { agents, detectInstalledAgents } from './agents.ts';
 import { track } from './telemetry.ts';
-import { removeSkillFromLock, getSkillFromLock } from './skill-lock.ts';
+import {
+  removeSkillFromLock,
+  getSkillFromLock,
+  enableSkill,
+} from './skill-lock.ts';
+import { enableLocalSkill } from './local-lock.ts';
 import type { AgentType } from './types.ts';
 import {
   getInstallPath,
@@ -214,6 +219,11 @@ export async function removeCommand(skillNames: string[], options: RemoveOptions
 
       if (isGlobal) {
         await removeSkillFromLock(skillName);
+        // Clean up disabled state
+        await enableSkill(skillName);
+      } else {
+        // Clean up local disabled state
+        await enableLocalSkill(skillName, cwd);
       }
 
       results.push({

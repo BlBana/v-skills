@@ -18,6 +18,8 @@ import type { WellKnownSkill } from './providers/wellknown.ts';
 import { agents, detectInstalledAgents, isUniversalAgent } from './agents.ts';
 import { AGENTS_DIR, SKILLS_SUBDIR } from './constants.ts';
 import { parseSkillMd } from './skills.ts';
+import { isSkillDisabled as isGlobalSkillDisabled } from './skill-lock.ts';
+import { isLocalSkillDisabled } from './local-lock.ts';
 
 export type InstallMode = 'symlink' | 'copy';
 
@@ -690,6 +692,8 @@ export interface InstalledSkill {
   canonicalPath: string;
   scope: 'project' | 'global';
   agents: AgentType[];
+  disabled: boolean;
+  disabledAt?: string;
 }
 
 /**
@@ -798,6 +802,11 @@ export async function listInstalledSkills(
               existing.agents.push(scope.agentType);
             }
           } else {
+            // Check disabled status
+            const isDisabled = scope.global
+              ? await isGlobalSkillDisabled(skill.name).catch(() => false)
+              : await isLocalSkillDisabled(skill.name, cwd).catch(() => false);
+
             skillsMap.set(skillKey, {
               name: skill.name,
               description: skill.description,
@@ -805,6 +814,8 @@ export async function listInstalledSkills(
               canonicalPath: skillDir,
               scope: scopeKey,
               agents: [scope.agentType],
+              disabled: isDisabled,
+              disabledAt: isDisabled ? new Date().toISOString() : undefined,
             });
           }
           continue;
@@ -891,6 +902,11 @@ export async function listInstalledSkills(
             }
           }
         } else {
+          // Check disabled status
+          const isDisabled = scope.global
+            ? await isGlobalSkillDisabled(skill.name).catch(() => false)
+            : await isLocalSkillDisabled(skill.name, cwd).catch(() => false);
+
           skillsMap.set(skillKey, {
             name: skill.name,
             description: skill.description,
@@ -898,6 +914,8 @@ export async function listInstalledSkills(
             canonicalPath: skillDir,
             scope: scopeKey,
             agents: installedAgents,
+            disabled: isDisabled,
+            disabledAt: isDisabled ? new Date().toISOString() : undefined,
           });
         }
       }

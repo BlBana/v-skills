@@ -55,8 +55,13 @@ import {
   dismissPrompt,
   getLastSelectedAgents,
   saveSelectedAgents,
+  enableSkill,
 } from './skill-lock.ts';
-import { addSkillToLocalLock, computeSkillFolderHash } from './local-lock.ts';
+import {
+  addSkillToLocalLock,
+  computeSkillFolderHash,
+  enableLocalSkill,
+} from './local-lock.ts';
 import type { Skill, AgentType } from './types.ts';
 import packageJson from '../package.json' with { type: 'json' };
 export function initTelemetry(version: string): void {
@@ -776,6 +781,12 @@ async function handleWellKnownSkills(
             sourceUrl: skill.sourceUrl,
             skillFolderHash: '', // Well-known skills don't have a folder hash
           });
+          // Re-enable the skill if it was previously disabled
+          try {
+            await enableSkill(skill.installName);
+          } catch {
+            // Don't fail if enableSkill fails
+          }
         } catch {
           // Don't fail installation if lock file update fails
         }
@@ -1499,6 +1510,12 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
               skillFolderHash,
               pluginName: skill.pluginName,
             });
+            // Re-enable the skill if it was previously disabled
+            try {
+              await enableSkill(skill.name);
+            } catch {
+              // Don't fail if enableSkill fails
+            }
           } catch {
             // Don't fail installation if lock file update fails
           }
@@ -1523,6 +1540,12 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
               },
               cwd
             );
+            // Re-enable the skill if it was previously disabled
+            try {
+              await enableLocalSkill(skill.name, cwd);
+            } catch {
+              // Don't fail if enableLocalSkill fails
+            }
           } catch {
             // Don't fail installation if lock file update fails
           }

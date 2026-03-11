@@ -10,10 +10,12 @@ const DIM = '\x1b[38;5;102m';
 const TEXT = '\x1b[38;5;145m';
 const CYAN = '\x1b[36m';
 const YELLOW = '\x1b[33m';
+const GRAY = '\x1b[38;5;240m';
 
 interface ListOptions {
   global?: boolean;
   agent?: string[];
+  all?: boolean;
 }
 
 /**
@@ -55,6 +57,8 @@ export function parseListOptions(args: string[]): ListOptions {
       while (i + 1 < args.length && !args[i + 1]!.startsWith('-')) {
         options.agent.push(args[++i]!);
       }
+    } else if (arg === '--all') {
+      options.all = true;
     }
   }
 
@@ -87,6 +91,11 @@ export async function runList(args: string[]): Promise<void> {
     agentFilter,
   });
 
+  // Filter out disabled skills unless --all is specified
+  const skillsToShow = options.all
+    ? installedSkills
+    : installedSkills.filter((s) => !s.disabled);
+
   // Fetch lock entries to get plugin grouping info
   const lockedSkills = await getAllLockedSkills();
 
@@ -103,24 +112,43 @@ export async function runList(args: string[]): Promise<void> {
     return;
   }
 
+  // Separate enabled and disabled skills
+  const enabledSkills = skillsToShow.filter((s) => !s.disabled);
+  const disabledSkills = options.all ? skillsToShow.filter((s) => s.disabled) : [];
+
+  if (enabledSkills.length === 0 && disabledSkills.length === 0) {
+    console.log(`${DIM}No ${scopeLabel.toLowerCase()} skills found.${RESET}`);
+    if (scope) {
+      console.log(`${DIM}Try listing project skills without -g${RESET}`);
+    } else {
+      console.log(`${DIM}Try listing global skills with -g${RESET}`);
+    }
+    return;
+  }
+
   function printSkill(skill: InstalledSkill, indent: boolean = false): void {
     const prefix = indent ? '  ' : '';
     const shortPath = shortenPath(skill.canonicalPath, cwd);
     const agentNames = skill.agents.map((a) => agents[a].displayName);
     const agentInfo =
       skill.agents.length > 0 ? formatList(agentNames) : `${YELLOW}not linked${RESET}`;
-    console.log(`${prefix}${CYAN}${skill.name}${RESET} ${DIM}${shortPath}${RESET}`);
+    const nameColor = skill.disabled ? GRAY : CYAN;
+    const statusIndicator = skill.disabled ? `${DIM}[disabled] ` : '';
+    console.log(`${prefix}${statusIndicator}${nameColor}${skill.name}${RESET} ${DIM}${shortPath}${RESET}`);
     console.log(`${prefix}  ${DIM}Agents:${RESET} ${agentInfo}`);
+    if (skill.disabled && skill.disabledAt) {
+      console.log(`${prefix}  ${DIM}Disabled at:${RESET} ${DIM}${skill.disabledAt}${RESET}`);
+    }
   }
 
   console.log(`${BOLD}${scopeLabel} Skills${RESET}`);
   console.log();
 
-  // Group skills by plugin
+  // Group enabled skills by plugin
   const groupedSkills: Record<string, InstalledSkill[]> = {};
   const ungroupedSkills: InstalledSkill[] = [];
 
-  for (const skill of installedSkills) {
+  for (const skill of enabledSkills) {
     const lockEntry = lockedSkills[skill.name];
     if (lockEntry?.pluginName) {
       const group = lockEntry.pluginName;
@@ -165,9 +193,21 @@ export async function runList(args: string[]): Promise<void> {
     }
   } else {
     // No groups, print flat list as before
-    for (const skill of installedSkills) {
+    for (const skill of enabledSkills) {
       printSkill(skill);
     }
+    console.log();
+  }
+
+  // Print disabled skills section if --all is specified and there are disabled skills
+  if (options.all && disabledSkills.length > 0) {
+    console.log(`${BOLD}Disabled Skills${RESET}`);
+    console.log();
+    for (const skill of disabledSkills) {
+      printSkill(skill);
+    }
+    console.log();
+    console.log(`${DIM}Tip: Use ${CYAN}skills enable <skill>${DIM} to re-enable disabled skills.${RESET}`);
     console.log();
   }
 }

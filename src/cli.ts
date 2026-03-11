@@ -14,6 +14,12 @@ import { removeCommand, parseRemoveOptions } from './remove.ts';
 import { runSync, parseSyncOptions } from './sync.ts';
 import { track } from './telemetry.ts';
 import { fetchSkillFolderHash, getGitHubToken } from './skill-lock.ts';
+import {
+  enableCommand,
+  disableCommand,
+  statusCommand,
+  parseToggleOptions,
+} from './skill-toggle.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -74,6 +80,15 @@ function showBanner(): void {
     `  ${DIM}$${RESET} ${TEXT}npx skills remove${RESET}               ${DIM}Remove installed skills${RESET}`
   );
   console.log(
+    `  ${DIM}$${RESET} ${TEXT}npx skills enable ${DIM}[skills]${RESET}       ${DIM}Enable disabled skills${RESET}`
+  );
+  console.log(
+    `  ${DIM}$${RESET} ${TEXT}npx skills disable ${DIM}[skills]${RESET}      ${DIM}Disable skills${RESET}`
+  );
+  console.log(
+    `  ${DIM}$${RESET} ${TEXT}npx skills status ${DIM}[skills]${RESET}       ${DIM}Check skill status${RESET}`
+  );
+  console.log(
     `  ${DIM}$${RESET} ${TEXT}npx skills list${RESET}                 ${DIM}List installed skills${RESET}`
   );
   console.log(
@@ -112,6 +127,9 @@ ${BOLD}Manage Skills:${RESET}
                        e.g. vercel-labs/agent-skills
                             https://github.com/vercel-labs/agent-skills
   remove [skills]      Remove installed skills
+  enable <skills>       Enable disabled skills (alias: e)
+  disable <skills>      Disable skills (alias: d)
+  status [skills]       Check if skills are enabled or disabled (alias: s)
   list, ls             List installed skills
   find [query]         Search for skills interactively
 
@@ -148,6 +166,18 @@ ${BOLD}Experimental Sync Options:${RESET}
 ${BOLD}List Options:${RESET}
   -g, --global           List global skills (default: project)
   -a, --agent <agents>   Filter by specific agents
+  --all                  Show all skills including disabled
+
+${BOLD}Enable Options:${RESET}
+  -g, --global           Enable global skill (default: project)
+  -y, --yes              Skip confirmation prompt
+
+${BOLD}Disable Options:${RESET}
+  -g, --global           Disable global skill (default: project)
+  -y, --yes              Skip confirmation prompt
+
+${BOLD}Status Options:${RESET}
+  -g, --global           Check global skills (default: project)
 
 ${BOLD}Options:${RESET}
   --help, -h        Show this help message
@@ -164,8 +194,13 @@ ${BOLD}Examples:${RESET}
   ${DIM}$${RESET} skills list                          ${DIM}# list project skills${RESET}
   ${DIM}$${RESET} skills ls -g                         ${DIM}# list global skills${RESET}
   ${DIM}$${RESET} skills ls -a claude-code             ${DIM}# filter by agent${RESET}
+  ${DIM}$${RESET} skills ls --all                      ${DIM}# include disabled skills${RESET}
   ${DIM}$${RESET} skills find                          ${DIM}# interactive search${RESET}
   ${DIM}$${RESET} skills find typescript               ${DIM}# search by keyword${RESET}
+  ${DIM}$${RESET} skills enable web-design              ${DIM}# enable a skill${RESET}
+  ${DIM}$${RESET} skills disable git-review             ${DIM}# disable a skill${RESET}
+  ${DIM}$${RESET} skills status web-design              ${DIM}# check skill status${RESET}
+  ${DIM}$${RESET} skills status                        ${DIM}# check all skills${RESET}
   ${DIM}$${RESET} skills check
   ${DIM}$${RESET} skills update
   ${DIM}$${RESET} skills experimental_install            ${DIM}# restore from skills-lock.json${RESET}
@@ -206,6 +241,92 @@ ${BOLD}Examples:${RESET}
 
 Discover more skills at ${TEXT}https://skills.sh/${RESET}
 `);
+}
+
+function showEnableHelp(): void {
+  console.log(`
+${BOLD}Usage:${RESET} skills enable [skills...] [options]
+
+${BOLD}Description:${RESET}
+  Enable disabled skills. If no skill names are provided,
+  an interactive selection menu will be shown showing only disabled skills.
+
+${BOLD}Arguments:${RESET}
+  skills            Optional skill names to enable (space-separated)
+
+${BOLD}Options:${RESET}
+  -g, --global       Enable global skills (~/) instead of project skills
+  -y, --yes          Skip confirmation prompts
+
+${BOLD}Examples:${RESET}
+  ${DIM}$${RESET} skills enable                          ${DIM}# interactive selection of disabled skills${RESET}
+  ${DIM}$${RESET} skills enable web-design               ${DIM}# enable specific skill${RESET}
+  ${DIM}$${RESET} skills e web-design git-review -y       ${DIM}# enable multiple skills without prompt${RESET}
+  ${DIM}$${RESET} skills enable --global web-design        ${DIM}# enable global skill${RESET}
+  ${DIM}$${RESET} skills e -g                           ${DIM}# interactive selection of global skills${RESET}
+
+${DIM}See also:${RESET}
+  ${DIM}• skills status    Check if skills are enabled or disabled${RESET}
+  ${DIM}• skills disable   Disable skills${RESET}
+`);
+}
+
+function showDisableHelp(): void {
+  console.log(`
+${BOLD}Usage:${RESET} skills disable [skills...] [options]
+
+${BOLD}Description:${RESET}
+  Disable installed skills. If no skill names are provided,
+  an interactive selection menu will be shown showing only enabled skills.
+  Disabled skills will not be loaded by agents.
+
+${BOLD}Arguments:${RESET}
+  skills            Optional skill names to disable (space-separated)
+
+${BOLD}Options:${RESET}
+  -g, --global       Disable global skills (~/) instead of project skills
+  -y, --yes          Skip confirmation prompts
+
+${BOLD}Examples:${RESET}
+  ${DIM}$${RESET} skills disable                         ${DIM}# interactive selection of enabled skills${RESET}
+  ${DIM}$${RESET} skills disable git-review              ${DIM}# disable specific skill${RESET}
+  ${DIM}$${RESET} skills d web-design git-review -y      ${DIM}# disable multiple skills without prompt${RESET}
+  ${DIM}$${RESET} skills disable --global web-design       ${DIM}# disable global skill${RESET}
+  ${DIM}$${RESET} skills d -g                            ${DIM}# interactive selection of global skills${RESET}
+
+${DIM}See also:${RESET}
+  ${DIM}• skills status    Check if skills are enabled or disabled${RESET}
+  ${DIM}• skills enable    Enable disabled skills${RESET}`);
+}
+
+function showStatusHelp(): void {
+  console.log(`
+${BOLD}Usage:${RESET} skills status [skills...] [options]
+
+${BOLD}Description:${RESET}
+  Check if skills are enabled or disabled. Shows the status of
+  specified skills or all installed skills if no arguments provided.
+
+${BOLD}Arguments:${RESET}
+  skills            Optional skill names to check (space-separated)
+
+${BOLD}Options:${RESET}
+  -g, --global       Check global skills (~/) instead of project skills
+
+${BOLD}Examples:${RESET}
+  ${DIM}$${RESET} skills status                          ${DIM}# show status of all skills${RESET}
+  ${DIM}$${RESET} skills status web-design               ${DIM}# check specific skill${RESET}
+  ${DIM}$${RESET} skills status web-design git-review      ${DIM}# check multiple skills${RESET}
+  ${DIM}$${RESET} skills status --global web-design       ${DIM}# check global skill${RESET}
+  ${DIM}$${RESET} skills s -g                            ${DIM}# check all global skills${RESET}
+
+${DIM}Output:${RESET}
+  ${DIM}  [enabled]  Skill is active and will be loaded by agents${RESET}
+  ${DIM}  [disabled] Skill is disabled and will not be loaded by agents${RESET}
+
+${DIM}See also:${RESET}
+  ${DIM}• skills enable    Enable disabled skills${RESET}
+  ${DIM}• skills disable   Disable skills${RESET}`);
 }
 
 function runInit(args: string[]): void {
@@ -675,6 +796,42 @@ async function main(): Promise<void> {
       await runSync(restArgs, syncOptions);
       break;
     }
+    case 'enable':
+    case 'e':
+      // Check for --help or -h flag
+      if (restArgs.includes('--help') || restArgs.includes('-h')) {
+        showEnableHelp();
+        break;
+      }
+      showLogo();
+      console.log();
+      const { skills: enableSkills, options: enableOpts } = parseToggleOptions(restArgs);
+      await enableCommand(enableSkills, enableOpts);
+      break;
+    case 'disable':
+    case 'd':
+      // Check for --help or -h flag
+      if (restArgs.includes('--help') || restArgs.includes('-h')) {
+        showDisableHelp();
+        break;
+      }
+      showLogo();
+      console.log();
+      const { skills: disableSkills, options: disableOpts } = parseToggleOptions(restArgs);
+      await disableCommand(disableSkills, disableOpts);
+      break;
+    case 'status':
+    case 's':
+      // Check for --help or -h flag
+      if (restArgs.includes('--help') || restArgs.includes('-h')) {
+        showStatusHelp();
+        break;
+      }
+      showLogo();
+      console.log();
+      const { skills: statusSkills, options: statusOpts } = parseToggleOptions(restArgs);
+      await statusCommand(statusSkills, statusOpts);
+      break;
     case 'list':
     case 'ls':
       await runList(restArgs);
