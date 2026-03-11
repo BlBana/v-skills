@@ -253,11 +253,13 @@ export async function disableCommand(skillNames: string[], options: ToggleOption
 
   spinner.stop('Disable process complete');
 
+  // Count unique skills, not agent operations
+  const disabledSkills = new Set(results.filter((r) => r.success).map((r) => r.skill));
   const successful = results.filter((r) => r.success);
   const failed = results.filter((r) => !r.success);
 
-  if (successful.length > 0) {
-    p.log.success(pc.green(`Successfully disabled ${successful.length} skill(s)`));
+  if (disabledSkills.size > 0) {
+    p.log.success(pc.green(`Successfully disabled ${disabledSkills.size} skill(s)`));
   }
 
   if (failed.length > 0) {
@@ -399,17 +401,34 @@ export async function enableCommand(skillNames: string[], options: ToggleOptions
     }
 
     targetAgents = selected as AgentType[];
-  } else if (detectedAgents.length === 1) {
-    // One agent detected, auto-select it and include universal agents
-    targetAgents = ensureUniversalAgents(detectedAgents);
-    const firstAgent = detectedAgents[0]!;
-    p.log.info(`Installing to: ${pc.cyan(agents[firstAgent].displayName)}`);
   } else {
-    // Multiple agents detected
-    targetAgents = ensureUniversalAgents(detectedAgents);
-    p.log.info(
-      `Installing to: ${targetAgents.map((a) => pc.cyan(agents[a].displayName)).join(', ')}`
-    );
+    // Agents detected, prompt to select which ones to use
+    // Group agents: detected agents first, then universal agents
+    const agentChoices = [
+      ...detectedAgents.map((agentType) => ({
+        value: agentType,
+        label: `${agents[agentType].displayName} ${pc.dim('(detected)')}`,
+      })),
+      ...Object.entries(agents)
+        .filter(([key]) => !detectedAgents.includes(key as AgentType))
+        .map(([key, config]) => ({
+          value: key as AgentType,
+          label: config.displayName,
+        })),
+    ];
+
+    const selected = await p.multiselect({
+      message: 'Which agents do you want to enable to skill to?',
+      options: agentChoices,
+      required: true,
+    });
+
+    if (p.isCancel(selected)) {
+      p.cancel('Enable cancelled');
+      process.exit(0);
+    }
+
+    targetAgents = selected as AgentType[];
   }
 
   spinner.start('Enabling skills...');
