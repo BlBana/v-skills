@@ -1,18 +1,10 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { listInstalledSkills } from './installer.ts';
-import {
-  disableSkill as disableSkillFromLock,
-  enableSkill as enableSkillFromLock,
-  isSkillDisabled as isSkillDisabledFromLock,
-  getDisabledSkills as getDisabledSkillsFromLock,
-} from './skill-lock.ts';
-import {
-  disableLocalSkill as disableSkillFromLocalLock,
-  enableLocalSkill as enableSkillFromLocalLock,
-  isLocalSkillDisabled as isSkillDisabledFromLocalLock,
-  getLocalDisabledSkills as getDisabledSkillsFromLocalLock,
-} from './local-lock.ts';
+import { listInstalledSkills, sanitizeName } from './installer.ts';
+import { agents, detectInstalledAgents, getUniversalAgents, isUniversalAgent } from './agents.ts';
+import { getCanonicalPath, getAgentBaseDir } from './installer.ts';
+import { installSkillForAgent, type InstallMode } from './installer.ts';
+import type { AgentType } from './types.ts';
 import type { InstalledSkill } from './installer.ts';
 
 export interface ToggleOptions {
@@ -47,186 +39,99 @@ export function parseToggleOptions(args: string[]): {
 }
 
 /**
- * Check if a skill is disabled (checks both global and local lock files).
+ * Helper to get the canonical skill path and skill directory name
  */
-async function isSkillDisabled(skillName: string, global: boolean): Promise<boolean> {
-  if (global) {
-    return isSkillDisabledFromLock(skillName);
-  }
-  return isSkillDisabledFromLocalLock(skillName);
+function getSkillInfo(skillName: string, global: boolean, cwd?: string): {
+  skillPath: string;
+  skillDirName: string;
+} {
+  const skillPath = getCanonicalPath(skillName, { global, cwd });
+  // Use sanitizeName to match how installSkillForAgent creates directories
+  const skillDirName = sanitizeName(skillName);
+  return { skillPath, skillDirName };
 }
 
 /**
- * Enable a skill.
+ * Ensures universal agents are always included in the target agents list.
+ * Used when auto-selecting agents during enable.
  */
-async function enableSkill(skillName: string, global: boolean): Promise<void> {
-  if (global) {
-    await enableSkillFromLock(skillName);
-  } else {
-    await enableSkillFromLocalLock(skillName);
+function ensureUniversalAgents(targetAgents: AgentType[]): AgentType[] {
+  const universalAgents = getUniversalAgents();
+  const result = [...targetAgents];
+
+  for (const ua of universalAgents) {
+    if (!result.includes(ua)) {
+      result.push(ua);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Check if a skill is installed in a specific agent's skills directory
+ */
+async function isSkillInAgentDir(
+  skillName: string,
+  agentType: AgentType,
+  isGlobal: boolean,
+  cwd?: string
+): Promise<boolean> {
+  const agentBase = getAgentBaseDir(agentType, isGlobal, cwd);
+  const { skillDirName } = getSkillInfo(skillName, isGlobal, cwd);
+  const skillDir = `${agentBase}/${skillDirName}`;
+
+  try {
+    const { stat } = await import('fs/promises');
+    await stat(skillDir);
+    return true;
+  } catch {
+    return false;
   }
 }
 
 /**
- * Disable a skill.
+ * Remove a skill from an agent's skills directory
  */
-async function disableSkill(skillName: string, global: boolean): Promise<void> {
-  if (global) {
-    await disableSkillFromLock(skillName);
-  } else {
-    await disableSkillFromLocalLock(skillName);
+async function removeSkillFromAgent(
+  skillName: string,
+  agentType: AgentType,
+  isGlobal: boolean,
+  cwd?: string
+): Promise<boolean> {
+  const agentBase = getAgentBaseDir(agentType, isGlobal, cwd);
+  const { skillDirName } = getSkillInfo(skillName, isGlobal, cwd);
+  const skillDir = `${agentBase}/${skillDirName}`;
+
+  try {
+    const { rm } = await import('fs/promises');
+    await rm(skillDir, { recursive: true, force: true });
+    return true;
+  } catch (err) {
+    return false;
   }
 }
 
 /**
- * Get disabled skills.
+ * Get agents that have a specific skill installed
  */
-async function getDisabledSkills(global: boolean): Promise<string[]> {
-  if (global) {
-    return getDisabledSkillsFromLock();
-  }
-  return getDisabledSkillsFromLocalLock();
-}
+async function getAgentsWithSkill(skillName: string, isGlobal: boolean, cwd?: string): Promise<AgentType[]> {
+  const detectedAgents = await detectInstalledAgents();
+  const agentsWithSkill: AgentType[] = [];
 
-/**
- * Format status message for a skill.
- */
-function formatSkillStatus(skill: InstalledSkill, disabled: boolean): string {
-  const status = disabled ? pc.dim('[disabled]') : pc.dim('[enabled]');
-  return `${status} ${pc.cyan(skill.name)}`;
-}
-
-/**
- * Run the enable command.
- */
-export async function enableCommand(skillNames: string[], options: ToggleOptions): Promise<void> {
-  const isGlobal = options.global ?? false;
-  const cwd = process.cwd();
-  const spinner = p.spinner();
-
-  spinner.start('Scanning for installed skills...');
-
-  const installedSkills = await listInstalledSkills({ global: isGlobal, cwd });
-  const disabledSkillsSet = new Set(await getDisabledSkills(isGlobal));
-
-  spinner.stop(`Found ${installedSkills.length} installed skill(s)`);
-
-  if (installedSkills.length === 0) {
-    p.outro(pc.yellow('No skills found to enable.'));
-    return;
-  }
-
-  // Filter to only show disabled skills for enable command
-  const disabledInstalledSkills = installedSkills.filter((s) => disabledSkillsSet.has(s.name));
-
-  if (disabledInstalledSkills.length === 0) {
-    p.outro(pc.green('All skills are already enabled.'));
-    return;
-  }
-
-  let selectedSkills: string[] = [];
-
-  if (skillNames.length > 0) {
-    // Match provided skill names against disabled skills
-    selectedSkills = disabledInstalledSkills
-      .filter((s) => skillNames.some((name) => name.toLowerCase() === s.name.toLowerCase()))
-      .map((s) => s.name);
-
-    if (selectedSkills.length === 0) {
-      p.log.error(
-        `No disabled skills found matching: ${skillNames.join(', ')}. Use 'skills status' to see disabled skills.`
-      );
-      return;
-    }
-
-    // Warn about skills that are already enabled or not found
-    const notFound = skillNames.filter(
-      (name) => !selectedSkills.some((s) => s.toLowerCase() === name.toLowerCase())
-    );
-    if (notFound.length > 0) {
-      p.log.warn(
-        `The following skill(s) are already enabled or not installed: ${notFound.join(', ')}`
-      );
-    }
-  } else {
-    // Interactive selection - only show disabled skills
-    const choices = disabledInstalledSkills.map((s) => ({
-      value: s.name,
-      label: s.name,
-      hint: s.description,
-    }));
-
-    const selected = await p.multiselect({
-      message: `Select skills to enable ${pc.dim('(space to toggle)')}`,
-      options: choices,
-      required: true,
-    });
-
-    if (p.isCancel(selected)) {
-      p.cancel('Enable cancelled');
-      process.exit(0);
-    }
-
-    selectedSkills = selected as string[];
-  }
-
-  if (!options.yes) {
-    console.log();
-    p.log.info('Skills to enable:');
-    for (const skillName of selectedSkills) {
-      p.log.message(`  ${pc.green('•')} ${skillName}`);
-    }
-    console.log();
-
-    const confirmed = await p.confirm({
-      message: `Are you sure you want to enable ${selectedSkills.length} skill(s)?`,
-    });
-
-    if (p.isCancel(confirmed) || !confirmed) {
-      p.cancel('Enable cancelled');
-      process.exit(0);
+  for (const agentType of detectedAgents) {
+    const isInstalled = await isSkillInAgentDir(skillName, agentType, isGlobal, cwd);
+    if (isInstalled) {
+      agentsWithSkill.push(agentType);
     }
   }
 
-  spinner.start('Enabling skills...');
-
-  const results: { skill: string; success: boolean; error?: string }[] = [];
-
-  for (const skillName of selectedSkills) {
-    try {
-      await enableSkill(skillName, isGlobal);
-      results.push({ skill: skillName, success: true });
-    } catch (err) {
-      results.push({
-        skill: skillName,
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  spinner.stop('Enable process complete');
-
-  const successful = results.filter((r) => r.success);
-  const failed = results.filter((r) => !r.success);
-
-  if (successful.length > 0) {
-    p.log.success(pc.green(`Successfully enabled ${successful.length} skill(s)`));
-  }
-
-  if (failed.length > 0) {
-    p.log.error(pc.red(`Failed to enable ${failed.length} skill(s)`));
-    for (const r of failed) {
-      p.log.message(`  ${pc.red('✗')} ${r.skill}: ${r.error}`);
-    }
-  }
-
-  console.log();
-  p.outro(pc.green('Done!'));
+  return agentsWithSkill;
 }
 
 /**
  * Run the disable command.
+ * Removes skill from agent directories (keeps source code).
  */
 export async function disableCommand(skillNames: string[], options: ToggleOptions): Promise<void> {
   const isGlobal = options.global ?? false;
@@ -234,10 +139,7 @@ export async function disableCommand(skillNames: string[], options: ToggleOption
   const spinner = p.spinner();
 
   spinner.start('Scanning for installed skills...');
-
   const installedSkills = await listInstalledSkills({ global: isGlobal, cwd });
-  const disabledSkillsSet = new Set(await getDisabledSkills(isGlobal));
-
   spinner.stop(`Found ${installedSkills.length} installed skill(s)`);
 
   if (installedSkills.length === 0) {
@@ -245,10 +147,16 @@ export async function disableCommand(skillNames: string[], options: ToggleOption
     return;
   }
 
-  // Filter to only show enabled skills for disable command
-  const enabledInstalledSkills = installedSkills.filter((s) => !disabledSkillsSet.has(s.name));
+  // Filter to only show enabled skills (installed in agent directories)
+  const availableSkills = [];
+  for (const skill of installedSkills) {
+    const agentsWithSkill = await getAgentsWithSkill(skill.name, isGlobal, cwd);
+    if (agentsWithSkill.length > 0) {
+      availableSkills.push(skill);
+    }
+  }
 
-  if (enabledInstalledSkills.length === 0) {
+  if (availableSkills.length === 0) {
     p.outro(pc.yellow('All skills are already disabled.'));
     return;
   }
@@ -256,9 +164,11 @@ export async function disableCommand(skillNames: string[], options: ToggleOption
   let selectedSkills: string[] = [];
 
   if (skillNames.length > 0) {
-    // Match provided skill names against enabled skills
-    selectedSkills = enabledInstalledSkills
-      .filter((s) => skillNames.some((name) => name.toLowerCase() === s.name.toLowerCase()))
+    // Match provided skill names against available skills
+    selectedSkills = availableSkills
+      .filter((s) =>
+        skillNames.some((name) => name.toLowerCase() === s.name.toLowerCase())
+      )
       .map((s) => s.name);
 
     if (selectedSkills.length === 0) {
@@ -273,11 +183,13 @@ export async function disableCommand(skillNames: string[], options: ToggleOption
       (name) => !selectedSkills.some((s) => s.toLowerCase() === name.toLowerCase())
     );
     if (notFound.length > 0) {
-      p.log.warn(`The following skill(s) are already disabled or not installed: ${notFound.join(', ')}`);
+      p.log.warn(
+        `The following skill(s) are already disabled or not installed: ${notFound.join(', ')}`
+      );
     }
   } else {
     // Interactive selection - only show enabled skills
-    const choices = enabledInstalledSkills.map((s) => ({
+    const choices = availableSkills.map((s) => ({
       value: s.name,
       label: s.name,
       hint: s.description,
@@ -304,7 +216,6 @@ export async function disableCommand(skillNames: string[], options: ToggleOption
       p.log.message(`  ${pc.red('•')} ${skillName}`);
     }
     console.log();
-
     const confirmed = await p.confirm({
       message: `Are you sure you want to disable ${selectedSkills.length} skill(s)?`,
     });
@@ -317,18 +228,26 @@ export async function disableCommand(skillNames: string[], options: ToggleOption
 
   spinner.start('Disabling skills...');
 
-  const results: { skill: string; success: boolean; error?: string }[] = [];
+  const results: { skill: string; agent: string; success: boolean; error?: string }[] = [];
 
+  // Remove skill from all agent directories
+  const detectedAgents = await detectInstalledAgents();
   for (const skillName of selectedSkills) {
-    try {
-      await disableSkill(skillName, isGlobal);
-      results.push({ skill: skillName, success: true });
-    } catch (err) {
-      results.push({
-        skill: skillName,
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      });
+    for (const agentType of detectedAgents) {
+      const isInstalled = await isSkillInAgentDir(skillName, agentType, isGlobal, cwd);
+      if (isInstalled) {
+        const removed = await removeSkillFromAgent(skillName, agentType, isGlobal, cwd);
+        if (removed) {
+          results.push({ skill: skillName, agent: agents[agentType].displayName, success: true });
+        } else {
+          results.push({
+            skill: skillName,
+            agent: agents[agentType].displayName,
+            success: false,
+            error: 'Failed to remove from agent directory',
+          });
+        }
+      }
     }
   }
 
@@ -344,7 +263,216 @@ export async function disableCommand(skillNames: string[], options: ToggleOption
   if (failed.length > 0) {
     p.log.error(pc.red(`Failed to disable ${failed.length} skill(s)`));
     for (const r of failed) {
-      p.log.message(`  ${pc.red('✗')} ${r.skill}: ${r.error}`);
+      p.log.message(`  ${pc.red('✗')} ${r.skill} → ${r.agent}: ${pc.dim(r.error || 'Unknown error')}`);
+    }
+  }
+
+  console.log();
+  p.outro(pc.green('Done!'));
+}
+
+/**
+ * Run the enable command.
+ * Installs skill to selected agents (like add flow).
+ */
+export async function enableCommand(skillNames: string[], options: ToggleOptions): Promise<void> {
+  const isGlobal = options.global ?? false;
+  const cwd = process.cwd();
+  const spinner = p.spinner();
+
+  spinner.start('Scanning for installed skills...');
+  const installedSkills = await listInstalledSkills({ global: isGlobal, cwd });
+  spinner.stop(`Found ${installedSkills.length} installed skill(s)`);
+
+  if (installedSkills.length === 0) {
+    p.outro(pc.yellow('No skills found to enable.'));
+    return;
+  }
+
+  // Find skills that are available (source code exists but not linked to agents)
+  const disabledSkills: Array<{ name: string; skill: InstalledSkill }> = [];
+
+  for (const skill of installedSkills) {
+    const agentsWithSkill = await getAgentsWithSkill(skill.name, isGlobal, cwd);
+    if (agentsWithSkill.length === 0) {
+      // Skill source exists but no agent has it linked - it's disabled
+      disabledSkills.push({ name: skill.name, skill });
+    }
+  }
+
+  if (disabledSkills.length === 0) {
+    p.outro(pc.yellow('All skills are already enabled.'));
+    return;
+  }
+
+  let selectedSkills: Array<{ name: string; skill: InstalledSkill }> = [];
+
+  if (skillNames.length > 0) {
+    // Match provided skill names against disabled skills
+    selectedSkills = disabledSkills
+      .filter((s) =>
+        skillNames.some((name) => name.toLowerCase() === s.name.toLowerCase())
+      );
+
+    if (selectedSkills.length === 0) {
+      p.log.error(
+        `No disabled skills found matching: ${skillNames.join(', ')}. Use 'skills status' to see skill status.`
+      );
+      return;
+    }
+
+    // Warn about skills that are already enabled or not found
+    const notFound = skillNames.filter(
+      (name) => !selectedSkills.some((s) => s.name.toLowerCase() === name.toLowerCase())
+    );
+    if (notFound.length > 0) {
+      p.log.warn(
+        `The following skill(s) are already enabled or not found: ${notFound.join(', ')}`
+      );
+    }
+  } else {
+    // Interactive selection - only show disabled skills
+    const choices = disabledSkills.map((s) => ({
+      value: s.name,
+      label: s.name,
+      hint: s.skill.description,
+    }));
+
+    const selected = await p.multiselect({
+      message: `Select skills to enable ${pc.dim('(space to toggle)')}`,
+      options: choices,
+      required: true,
+    });
+
+    if (p.isCancel(selected)) {
+      p.cancel('Enable cancelled');
+      process.exit(0);
+    }
+
+    // Map selected skill names back to full skill objects
+    selectedSkills = disabledSkills.filter((s) =>
+      (selected as string[]).includes(s.name)
+    );
+  }
+
+  if (!options.yes) {
+    console.log();
+    p.log.info('Skills to enable:');
+    for (const { name } of selectedSkills) {
+      p.log.message(`  ${pc.green('•')} ${name}`);
+    }
+    console.log();
+    const confirmed = await p.confirm({
+      message: `Are you sure you want to enable ${selectedSkills.length} skill(s)?`,
+    });
+
+    if (p.isCancel(confirmed) || !confirmed) {
+      p.cancel('Enable cancelled');
+      process.exit(0);
+    }
+  }
+
+  // Prompt for agent selection (same as add command)
+  spinner.start('Loading agents...');
+  const detectedAgents = await detectInstalledAgents();
+  const validAgents = Object.keys(agents);
+  spinner.stop(`${detectedAgents.length} agents`);
+
+  let targetAgents: AgentType[] = [];
+
+  if (detectedAgents.length === 0) {
+    // No agents detected, prompt to select from all agents
+    const agentChoices = Object.entries(agents).map(([key, config]) => ({
+      value: key as AgentType,
+      label: config.displayName,
+    }));
+
+    const selected = await p.multiselect({
+      message: 'Which agents do you want to enable the skill to?',
+      options: agentChoices,
+      required: true,
+    });
+
+    if (p.isCancel(selected)) {
+      p.cancel('Enable cancelled');
+      process.exit(0);
+    }
+
+    targetAgents = selected as AgentType[];
+  } else if (detectedAgents.length === 1) {
+    // One agent detected, auto-select it and include universal agents
+    targetAgents = ensureUniversalAgents(detectedAgents);
+    const firstAgent = detectedAgents[0]!;
+    p.log.info(`Installing to: ${pc.cyan(agents[firstAgent].displayName)}`);
+  } else {
+    // Multiple agents detected
+    targetAgents = ensureUniversalAgents(detectedAgents);
+    p.log.info(
+      `Installing to: ${targetAgents.map((a) => pc.cyan(agents[a].displayName)).join(', ')}`
+    );
+  }
+
+  spinner.start('Enabling skills...');
+
+  const results: { skill: string; agent: string; success: boolean; error?: string }[] = [];
+
+  // Install skill to selected agents (symlink mode)
+  const installMode: InstallMode = 'symlink';
+  const cwdForInstall = isGlobal ? undefined : cwd;
+
+  for (const { name: skillName, skill } of selectedSkills) {
+    // Read the skill SKILL.md from source
+    const { parseSkillMd } = await import('./skills.ts');
+    const parsedSkill = await parseSkillMd(`${skill.path}/SKILL.md`);
+    if (!parsedSkill) continue;
+
+    // Install to each selected agent
+    for (const agentType of targetAgents) {
+      try {
+        const result = await installSkillForAgent(
+          parsedSkill,
+          agentType,
+          { global: isGlobal, cwd: cwdForInstall, mode: installMode }
+        );
+
+        if (result.success) {
+          results.push({
+            skill: skillName,
+            agent: agents[agentType].displayName,
+            success: true,
+          });
+        } else {
+          results.push({
+            skill: skillName,
+            agent: agents[agentType].displayName,
+            success: false,
+            error: result.error,
+          });
+        }
+      } catch (err) {
+        results.push({
+          skill: skillName,
+          agent: agents[agentType].displayName,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  spinner.stop('Enable process complete');
+
+  const successful = results.filter((r) => r.success);
+  const failed = results.filter((r) => !r.success);
+
+  if (successful.length > 0) {
+    p.log.success(pc.green(`Successfully enabled ${successful.length} skill(s)`));
+  }
+
+  if (failed.length > 0) {
+    p.log.error(pc.red(`Failed to enable ${failed.length} skill(s)`));
+    for (const r of failed) {
+      p.log.message(`  ${pc.red('✗')} ${r.skill} → ${r.agent}: ${pc.dim(r.error || 'Unknown error')}`);
     }
   }
 
@@ -354,6 +482,7 @@ export async function disableCommand(skillNames: string[], options: ToggleOption
 
 /**
  * Run the status command.
+ * Shows which agents have each skill installed.
  */
 export async function statusCommand(skillNames: string[], options: ToggleOptions): Promise<void> {
   const isGlobal = options.global ?? false;
@@ -361,10 +490,7 @@ export async function statusCommand(skillNames: string[], options: ToggleOptions
   const spinner = p.spinner();
 
   spinner.start('Scanning for installed skills...');
-
   const installedSkills = await listInstalledSkills({ global: isGlobal, cwd });
-  const disabledSkillsSet = new Set(await getDisabledSkills(isGlobal));
-
   spinner.stop(`Found ${installedSkills.length} installed skill(s)`);
 
   if (installedSkills.length === 0) {
@@ -388,25 +514,63 @@ export async function statusCommand(skillNames: string[], options: ToggleOptions
   p.log.info('Skill Status:');
   console.log();
 
+  // For each skill, check which agents have it installed
+  const detectedAgents = await detectInstalledAgents();
+
   for (const skill of skillsToCheck) {
-    const disabled = disabledSkillsSet.has(skill.name);
-    const status = disabled ? pc.dim('[disabled]') : pc.dim('[enabled]');
-    const nameColor = disabled ? pc.gray : pc.cyan;
+    const agentsWithSkill: string[] = [];
+    const agentsWithoutSkill: string[] = [];
+
+    for (const agentType of detectedAgents) {
+      const isInstalled = await isSkillInAgentDir(skill.name, agentType, isGlobal, cwd);
+      if (isInstalled) {
+        agentsWithSkill.push(agents[agentType].displayName);
+      } else {
+        agentsWithoutSkill.push(agents[agentType].displayName);
+      }
+    }
+
+    const isEnabled = agentsWithSkill.length > 0;
+    const status = isEnabled ? pc.dim('[enabled]') : pc.dim('[disabled]');
+    const nameColor = isEnabled ? pc.cyan : pc.gray;
+
     console.log(`  ${status} ${nameColor(skill.name)}`);
     console.log(`    ${pc.dim(skill.description)}`);
 
     // Show agents
-    if (skill.agents.length > 0) {
-      const agentsStr = skill.agents.join(', ');
-      console.log(`    ${pc.dim('Agents:')} ${agentsStr}`);
+    if (agentsWithSkill.length > 0) {
+      console.log(`    ${pc.dim('Installed in:')} ${agentsWithSkill.join(', ')}`);
+    }
+
+    if (!isEnabled && agentsWithoutSkill.length > 0) {
+      console.log(
+        `    ${pc.dim('Available in:')} ${agentsWithoutSkill.join(', ')} ${pc.dim('(not installed)')}`
+      );
     }
 
     console.log();
   }
 
   // Show summary
-  const enabledCount = skillsToCheck.filter((s) => !disabledSkillsSet.has(s.name)).length;
-  const disabledCount = skillsToCheck.filter((s) => disabledSkillsSet.has(s.name)).length;
+  let enabledCount = 0;
+  let disabledCount = 0;
+
+  for (const skill of skillsToCheck) {
+    const hasInAnyAgent = await (async () => {
+      for (const agentType of detectedAgents) {
+        if (await isSkillInAgentDir(skill.name, agentType, isGlobal, cwd)) {
+          return true;
+        }
+      }
+      return false;
+    })();
+
+    if (hasInAnyAgent) {
+      enabledCount++;
+    } else {
+      disabledCount++;
+    }
+  }
 
   console.log();
   p.log.info(
@@ -416,15 +580,12 @@ export async function statusCommand(skillNames: string[], options: ToggleOptions
 
   if (!skillNames.length) {
     // Suggest commands
-    const disabledSkills = skillsToCheck.filter((s) => disabledSkillsSet.has(s.name));
-    const enabledSkills = skillsToCheck.filter((s) => !disabledSkillsSet.has(s.name));
-
-    if (disabledSkills.length > 0) {
+    if (disabledCount > 0) {
       console.log(
         `${pc.dim('To enable disabled skills:')} ${pc.cyan('skills enable <skill>')}`
       );
     }
-    if (enabledSkills.length > 0) {
+    if (enabledCount > 0) {
       console.log(
         `${pc.dim('To disable skills:')} ${pc.cyan('skills disable <skill>')}`
       );
